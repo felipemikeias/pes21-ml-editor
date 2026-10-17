@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          # Older Ubuntu = older glibc = runs on more Linux distributions.
+          - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          # Apple Silicon runner cross-compiles the Intel build with Xcode's toolchain.
+          - { name: macos-x86_64, os: macos-latest, target: x86_64-apple-darwin }
+          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      # No build cache for releases: every release is built from scratch.
+      - name: Linux GUI build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl1-mesa-dev libx11-dev libwayland-dev
+      - name: Test
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: cargo test --workspace --locked --release --target ${{ matrix.target }}
+      - name: Build
+        env:
+          # Fail the Windows build if the icon/version resources cannot be embedded.
+          PES21_REQUIRE_WINDOWS_RESOURCES: "1"
+        run: cargo build --workspace --locked --release --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tags give "1.0.0"; manual runs on a branch give "dev-<commit>" (a branch name
+          # may contain "/", which cannot go into file names).
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"; bundle_version="$version"
+          else
+            version="dev-${GITHUB_SHA::7}"; bundle_version="0.0.0"
+          fi
+          pkg="pes21-ml-editor-${version}-${{ matrix.name }}"
+          bin="target/${{ matrix.target }}/release"
+          # The desktop app sits at the top level; the command-line tool goes in a
+          # subfolder so nobody double-clicks it by mistake.
+          mkdir -p "dist/$pkg/command-line"
+          cp README.md LICENSE-MIT LICENSE-APACHE THIRD_PARTY_NOTICES.md "dist/$pkg/"
+          case "${{ runner.os }}" in
+            Windows)
+              cp docs/INSTALL-WINDOWS.md docs/USAGE.md "dist/$pkg/"
+              cp "$bin/pes21-ml-editor.exe" "dist/$pkg/"
+              cp "$bin/pes21-ml.exe" "dist/$pkg/command-line/"
+              (cd dist && 7z a "$pkg.zip" "$pkg" >/dev/null) ;;
+            macOS)
+              cp docs/INSTALL-MACOS.md docs/USAGE.md "dist/$pkg/"
+              app="dist/$pkg/PES 2021 ML Editor.app"
+              mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+              cp "$bin/pes21-ml-editor" "$app/Contents/MacOS/"
+              cp assets/icon.icns "$app/Contents/Resources/AppIcon.icns"
+              sed "s/@VERSION@/${bundle_version}/g" assets/macos/Info.plist > "$app/Contents/Info.plist"
+              # Ad-hoc signature: required for Apple Silicon, not a Developer ID.
+              codesign --force --sign - "$app"
+              cp "$bin/pes21-ml" "dist/$pkg/command-line/"
+              ln -s /Applications "dist/$pkg/Applications"
+              hdiutil create -volname "PES 2021 ML Editor" -srcfolder "dist/$pkg" \
+                -ov -format UDZO "dist/$pkg.dmg" ;;
+            Linux)
+              cp docs/INSTALL-LINUX.md docs/USAGE.md "dist/$pkg/"
+              cp "$bin/pes21-ml-editor" "dist/$pkg/"
+              cp "$bin/pes21-ml" "dist/$pkg/command-line/"
+              cp assets/icon-256.png "dist/$pkg/pes21-ml-editor.png"
+              cp assets/linux/pes21-ml-editor.desktop "dist/$pkg/"
+              install -m 755 assets/linux/install.sh "dist/$pkg/install.sh"
+              tar -C dist -czf "dist/$pkg.tar.gz" "$pkg" ;;
+          esac
+          rm -rf "dist/$pkg"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the draft release
+      id-token: write # sign the provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      # Lets anyone verify a download came from this workflow:
+      #   gh attestation verify <file> --repo <owner>/<repo>
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: dist/*
+          draft: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- App bundle metadata. @VERSION@ is replaced at packaging time
+     (scripts/build-macos.sh and .github/workflows/release.yml). -->
+<plist version="1.0"><dict>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>PES 2021 ML Editor</string>
+  <key>CFBundleDisplayName</key><string>PES 2021 ML Editor</string>
+  <key>CFBundleIdentifier</key><string>io.github.pes21-ml-editor</string>
+  <key>CFBundleExecutable</key><string>pes21-ml-editor</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <!-- Lets dual-GPU Macs stay on the integrated GPU (less battery, no fan spin-up). -->
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <!-- The UI is in English, Spanish and Portuguese; this makes the system "Open" panel
+       follow the user's language. -->
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>es</string><string>pt-BR</string></array>
+  <key>CFBundleAllowMixedLocalizations</key><true/>
+  <key>NSHumanReadableCopyright</key><string>MIT OR Apache-2.0</string>
+</dict></plist>

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PES 2021 ML Editor
+Comment=Edit eFootball PES 2021 Master League saves
+Exec=pes21-ml-editor %f
+Icon=pes21-ml-editor
+Terminal=false
+Categories=Utility;
+StartupWMClass=pes21-ml-editor
+StartupNotify=true

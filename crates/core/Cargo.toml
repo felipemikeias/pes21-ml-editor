@@ -1,0 +1,15 @@
+[package]
+name = "pes21-ml-core"
+description = "Safe reader/writer for eFootball PES 2021 Master League save files (decryption, field editing, atomic saving)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

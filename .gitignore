@@ -1,0 +1,6 @@
+/target
+/dist
+# Never commit personal saves or their backups
+ML0*
+*.backup-*
+**/__pycache__/

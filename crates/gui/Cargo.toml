@@ -1,0 +1,28 @@
+[package]
+name = "pes21-ml-gui"
+description = "Desktop editor for eFootball PES 2021 Master League saves."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "pes21-ml-editor"
+path = "src/main.rs"
+
+[dependencies]
+pes21-ml-core.workspace = true
+# OpenGL (glow) backend: small binaries and works on older GPUs/VMs.
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
+# Native dialogs; on Linux uses the XDG desktop portal (no GTK build dependency).
+rfd = "0.17"
+# Reads the operating system language to pick the UI language.
+sys-locale = "0.3"
+
+[build-dependencies]
+# Embeds the icon, version info and manifest into the Windows .exe.
+embed-resource = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/cli", "crates/gui"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["pes21-ml-editor contributors"]
+
+[workspace.dependencies]
+pes21-ml-core = { path = "crates/core", version = "1.0.0" }
+thiserror = "2"
+tempfile = "3"
+clap = { version = "4", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+
+[profile.release]
+# Optimise for size: the GUI only redraws on input, so smaller code costs nothing.
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# The save cipher is the only hot path: keep it at full speed.
+[profile.release.package.pes21-ml-core]
+opt-level = 3
+
+# The cipher runs ~5 million Mersenne Twister rounds per save; keep debug builds usable.
+[profile.dev.package.pes21-ml-core]
+opt-level = 3
