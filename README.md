@@ -2,10 +2,10 @@
   <img src="assets/icon-256.png" width="128" alt="PES 2021 ML Editor icon">
 </p>
 
-<h1 align="center">PES 2021 ML Editor</h1>
+<h1 align="center">PES 2021/Football Life Master League Save Editor (Open-Source)</h1>
 
 <p align="center">
-  Open-source, cross-platform editor for <b>eFootball PES 2021</b> Master League saves.
+  Open-source, cross-platform editor for <b>eFootball PES 2021</b> Master League saves (infinity money).
 </p>
 
 Everything runs in memory with no helper programs, and every change is verified before and
