@@ -24,7 +24,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 # Integration tests against a real save (copied to a temp dir, never modified):
 PES21_ML_SAMPLE=/path/to/ML0000000x cargo test -p pes21-ml-core --test real_save -- --include-ignored
-cargo audit --deny warnings
+cargo audit --deny warnings              # ignores, each with a reason: .cargo/audit.toml
 cargo build --release --locked          # binaries in target/release/
 ```
 

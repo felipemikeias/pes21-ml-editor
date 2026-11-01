@@ -1,0 +1,15 @@
+# cargo-audit settings (CI runs `cargo audit --deny warnings`).
+#
+# Every ignored advisory needs a reason and should be removed as soon as a dependency
+# update makes it unnecessary.
+
+[advisories]
+ignore = [
+    # `zvariant`, `zbus_names` and `zvariant_derive` are flagged as unmaintained (not
+    # vulnerable). They come in only on Linux, through eframe's screen-reader support
+    # (egui-winit -> accesskit_unix -> atspi), and have no maintained replacement in
+    # eframe 0.37. Revisit when eframe/accesskit move off them.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+]
