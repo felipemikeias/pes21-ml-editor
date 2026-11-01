@@ -1,7 +1,8 @@
 //! Core library of **pes21-ml-editor**, a safe editor for eFootball PES 2021 Master
 //! League save files.
 //!
-//! * [`crypto`] — the PES 2016–2021 save container cipher.
+//! * [`crypto`] — the PES 2016–2021 save container cipher, also used by games built on
+//!   PES 2021; keys that are not known are recovered from the file ([`crypto::Container::recover`]).
 //! * [`master_league`] — offsets and validation of the editable Master League fields.
 //! * [`save_file`] — loading, backing up, atomically writing and verifying saves.
 //! * [`money`] — display conventions (units of €100, other currencies).
@@ -17,6 +18,7 @@ pub mod crypto;
 pub mod master_league;
 pub mod money;
 mod mt19937;
+mod recover;
 pub mod save_file;
 
 /// Everything that can go wrong. Messages are bilingual (pt-BR / en).
@@ -30,7 +32,7 @@ pub enum Error {
     TooSmall(usize),
     #[error("estrutura do save inválida ou chave errada / invalid save layout or wrong key")]
     BadLayout,
-    #[error("não é um save conhecido do PES 2016–2021 / not a known PES 2016–2021 save")]
+    #[error("não foi possível decifrar este save (nem PES 2016–2021 nem jogo compatível) / could not decrypt this save (neither PES 2016–2021 nor a compatible game)")]
     UnknownKey,
     #[error("este save é do {0}, não do eFootball PES 2021 / this save is from {0}, not eFootball PES 2021")]
     WrongGame(&'static str),

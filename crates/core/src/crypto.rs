@@ -17,8 +17,13 @@
 //! Every block is encrypted with [`crypt_in_place`], a XOR stream derived from an
 //! MT19937 generator seeded with the 64-byte block key. XOR is symmetric, so the
 //! same routine encrypts and decrypts.
+//!
+//! Games built on PES 2021 (such as the Football Life series) use the same container
+//! with their own master key. When a file's key is not known, [`Container::recover`]
+//! finds it from the file itself.
 
 use crate::mt19937::Mt19937;
+use crate::recover::find_rolling_key;
 use crate::Error;
 
 /// Size of the leading encryption header.
@@ -33,7 +38,8 @@ pub const MAX_SAVE_SIZE: usize = 256 * 1024 * 1024;
 /// A 64-byte per-game master key.
 pub type MasterKey = [u8; 64];
 
-/// Games whose master keys are known (published by pesXdecrypter).
+/// Games whose master keys are known: PES 2016–2021 (published by pesXdecrypter) and
+/// games built on PES 2021.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Game {
     Pes2016,
@@ -43,11 +49,14 @@ pub enum Game {
     Pes2019,
     Pes2020,
     Pes2021,
+    /// SP Football Life 2027, a standalone game built on eFootball PES 2021.
+    FootballLife2027,
 }
 
 impl Game {
-    pub const ALL: [Game; 7] = [
+    pub const ALL: [Game; 8] = [
         Game::Pes2021,
+        Game::FootballLife2027,
         Game::Pes2020,
         Game::Pes2019,
         Game::Pes2018,
@@ -65,7 +74,13 @@ impl Game {
             Game::Pes2019 => "PES 2019",
             Game::Pes2020 => "eFootball PES 2020",
             Game::Pes2021 => "eFootball PES 2021",
+            Game::FootballLife2027 => "SP Football Life 2027",
         }
+    }
+
+    /// Whether the game keeps its Master League data in the eFootball PES 2021 layout.
+    pub fn is_pes2021_based(self) -> bool {
+        matches!(self, Game::Pes2021 | Game::FootballLife2027)
     }
 
     pub fn file_header_size(self) -> usize {
@@ -84,6 +99,7 @@ impl Game {
             Game::Pes2019 => &KEY_PES19,
             Game::Pes2020 => &KEY_PES20,
             Game::Pes2021 => &KEY_PES21,
+            Game::FootballLife2027 => &KEY_FL27,
         }
     }
 }
@@ -137,6 +153,15 @@ const KEY_PES21: MasterKey = [
     0xF5, 0x09, 0x92, 0x00, 0xB2, 0x3E, 0x88, 0x9F, 0xEB, 0x24, 0x43, 0x05, 0x58, 0x76, 0x00, 0x22,
     0x9B, 0xFE, 0xEC, 0xF6, 0x50, 0x00, 0x29, 0xD3, 0x42, 0x75, 0x50, 0xB9, 0xEC, 0xD2, 0xF6, 0x75,
 ];
+/// Recovered with [`Container::recover`] from a save: games built on PES 2021 store
+/// their shuffled master key in the file header ([`master_key_from_file_header`]).
+#[rustfmt::skip]
+const KEY_FL27: MasterKey = [
+    0xCE, 0xF7, 0x98, 0xB8, 0x71, 0x82, 0x31, 0xB5, 0x32, 0x5D, 0xFB, 0xC7, 0x30, 0x1B, 0xA4, 0xAD,
+    0xF8, 0x4F, 0xD4, 0xD8, 0x5C, 0x4B, 0x0E, 0x6B, 0x4F, 0x3E, 0xAC, 0x61, 0xF2, 0x28, 0x15, 0xC9,
+    0x0C, 0x43, 0x10, 0x55, 0x97, 0xC1, 0x3F, 0x00, 0xD3, 0x67, 0x4F, 0x3B, 0x63, 0x73, 0x1F, 0x9D,
+    0x28, 0xE4, 0x79, 0xB7, 0x33, 0x33, 0x13, 0x66, 0xB8, 0x71, 0x09, 0x92, 0x5E, 0x90, 0x2C, 0x05,
+];
 
 /// XORs `buf` with the keystream derived from `key`. Encrypting and decrypting are the same.
 pub fn crypt_in_place(key: &[u8; 64], buf: &mut [u8]) {
@@ -167,7 +192,7 @@ pub fn crypt_in_place(key: &[u8; 64], buf: &mut [u8]) {
     }
 }
 
-/// Reverses the byte order inside each 8-byte lane of the master key.
+/// Reverses the byte order inside each 8-byte lane of the master key (its own inverse).
 fn shuffle_master_key(master: &MasterKey) -> [u8; 64] {
     let mut out = [0u8; 64];
     for (o, i) in out
@@ -223,10 +248,53 @@ fn block_key(rolling: &[u8; 64], param: u64) -> [u8; 64] {
     out
 }
 
+/// The master key a PES 2021-based game stores, shuffled, in the first 64 bytes of the
+/// decrypted file header.
+pub fn master_key_from_file_header(file_header: &[u8]) -> Option<MasterKey> {
+    let mut stored = [0u8; 64];
+    stored.copy_from_slice(file_header.get(..64)?);
+    Some(shuffle_master_key(&stored))
+}
+
+/// Decrypts the file header and checks that the block sizes it declares add up to
+/// exactly the file length, which both rejects truncated or corrupted files and detects
+/// a wrong key. Returns the header and the `[description, logo, data, serial]` sizes.
+fn read_file_header(
+    file: &[u8],
+    rolling: &[u8; 64],
+    fh_size: usize,
+) -> Result<(Vec<u8>, [usize; 4]), Error> {
+    let start = ENCRYPTION_HEADER_SIZE;
+    let mut file_header = file
+        .get(start..start + fh_size)
+        .ok_or(Error::TooSmall(file.len()))?
+        .to_vec();
+    crypt_in_place(&block_key(rolling, fh_size as u64), &mut file_header);
+    let data_size = read_u32(&file_header, 64) as usize;
+    let logo_size = read_u32(&file_header, 68) as usize;
+    let desc_size = read_u32(&file_header, 72) as usize;
+    let serial_size = (read_u32(&file_header, 76) as usize)
+        .checked_mul(2)
+        .ok_or(Error::BadLayout)?;
+    let sizes = [desc_size, logo_size, data_size, serial_size];
+    let expected = sizes
+        .iter()
+        .try_fold(start + fh_size, |acc, &s| acc.checked_add(s))
+        .ok_or(Error::BadLayout)?;
+    if expected != file.len() {
+        return Err(Error::BadLayout);
+    }
+    Ok((file_header, sizes))
+}
+
 /// Decrypted contents of a save file. Field names follow pesXdecrypter's output files.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Container {
-    pub game: Game,
+    /// The known game whose key opened the file, or `None` if the key was recovered from
+    /// the file itself ([`Container::recover`]).
+    pub game: Option<Game>,
+    /// Master key used to re-encrypt the encryption header.
+    pub master_key: MasterKey,
     /// `encryptHeader.dat` — plaintext encryption header (bytes 256..320 are the seed).
     pub encryption_header: [u8; ENCRYPTION_HEADER_SIZE],
     /// `header.dat` — file header. Its size fields are recomputed when encrypting.
@@ -296,12 +364,39 @@ impl Container {
             .collect()
     }
 
+    /// Name of the game the file belongs to: the known game, or the version string the
+    /// file header carries when the key was recovered.
+    pub fn game_name(&self) -> String {
+        match self.game {
+            Some(game) => game.name().to_owned(),
+            None => self.game_version(),
+        }
+    }
+
+    fn file_header_size(&self) -> usize {
+        self.game.map_or(FILE_HEADER_SIZE, Game::file_header_size)
+    }
+
     /// Decrypts `file` with the given game's master key.
     ///
     /// The declared block sizes must add up to exactly the file length; this both
     /// rejects truncated/corrupted files and detects a wrong master key.
     pub fn decrypt(file: &[u8], game: Game) -> Result<Self, Error> {
-        let fh_size = game.file_header_size();
+        Self::decrypt_with(file, Some(game), game.master_key(), game.file_header_size())
+    }
+
+    /// Decrypts a PES 2018+ style file with a master key outside [`Game::ALL`], such as
+    /// one [`Self::recover`] found earlier.
+    pub fn decrypt_with_master_key(file: &[u8], master_key: &MasterKey) -> Result<Self, Error> {
+        Self::decrypt_with(file, None, master_key, FILE_HEADER_SIZE)
+    }
+
+    fn decrypt_with(
+        file: &[u8],
+        game: Option<Game>,
+        master_key: &MasterKey,
+        fh_size: usize,
+    ) -> Result<Self, Error> {
         if file.len() > MAX_SAVE_SIZE {
             return Err(Error::TooLarge(file.len()));
         }
@@ -310,27 +405,11 @@ impl Container {
         }
         let mut enc = [0u8; ENCRYPTION_HEADER_SIZE];
         enc.copy_from_slice(&file[..ENCRYPTION_HEADER_SIZE]);
-        let encryption_header = crypt_encryption_header(&enc, game.master_key());
+        let encryption_header = crypt_encryption_header(&enc, master_key);
         let rolling = rolling_key(&encryption_header);
-
-        let mut pos = ENCRYPTION_HEADER_SIZE;
-        let mut file_header = file[pos..pos + fh_size].to_vec();
-        crypt_in_place(&block_key(&rolling, fh_size as u64), &mut file_header);
-        pos += fh_size;
-
-        let data_size = read_u32(&file_header, 64) as usize;
-        let logo_size = read_u32(&file_header, 68) as usize;
-        let desc_size = read_u32(&file_header, 72) as usize;
-        let serial_size = (read_u32(&file_header, 76) as usize)
-            .checked_mul(2)
-            .ok_or(Error::BadLayout)?;
-        let expected = [data_size, logo_size, desc_size, serial_size]
-            .iter()
-            .try_fold(pos, |acc, &s| acc.checked_add(s))
-            .ok_or(Error::BadLayout)?;
-        if expected != file.len() {
-            return Err(Error::BadLayout);
-        }
+        let (file_header, [desc_size, logo_size, data_size, serial_size]) =
+            read_file_header(file, &rolling, fh_size)?;
+        let mut pos = ENCRYPTION_HEADER_SIZE + fh_size;
 
         let mut take = |len: usize, param: u64| {
             let mut block = file[pos..pos + len].to_vec();
@@ -345,6 +424,7 @@ impl Container {
 
         Ok(Self {
             game,
+            master_key: *master_key,
             encryption_header,
             file_header,
             description,
@@ -366,9 +446,42 @@ impl Container {
         Err(Error::UnknownKey)
     }
 
+    /// Opens a file of a PES 2021-based game whose master key is not known.
+    ///
+    /// The rolling key is recovered from a stretch of the data whose plaintext is
+    /// constant (see [`crate::recover`]); `scan_from` is the file offset where such
+    /// stretches are expected. The master key is then read from the decrypted file
+    /// header, and the file is accepted only if that key opens it like any known key.
+    pub fn recover(file: &[u8], scan_from: usize) -> Result<Self, Error> {
+        if file.len() > MAX_SAVE_SIZE {
+            return Err(Error::TooLarge(file.len()));
+        }
+        let mut opened = None;
+        let first_block = ENCRYPTION_HEADER_SIZE + FILE_HEADER_SIZE;
+        find_rolling_key(file, first_block, scan_from, |rolling| {
+            let Ok((file_header, _)) = read_file_header(file, rolling, FILE_HEADER_SIZE) else {
+                return false;
+            };
+            let Some(master_key) = master_key_from_file_header(&file_header) else {
+                return false;
+            };
+            opened = Self::decrypt_with_master_key(file, &master_key).ok();
+            opened.is_some()
+        });
+        opened.ok_or(Error::UnknownKey)
+    }
+
+    /// Tries every known master key, then [`Self::recover`].
+    pub fn decrypt_or_recover(file: &[u8], scan_from: usize) -> Result<Self, Error> {
+        match Self::decrypt_any(file) {
+            Err(Error::UnknownKey) => Self::recover(file, scan_from),
+            other => other,
+        }
+    }
+
     /// Re-encrypts the container. Header size fields are refreshed from the block lengths.
     pub fn encrypt(&self) -> Result<Vec<u8>, Error> {
-        let fh_size = self.game.file_header_size();
+        let fh_size = self.file_header_size();
         if self.file_header.len() != fh_size {
             return Err(Error::BadLayout);
         }
@@ -399,7 +512,7 @@ impl Container {
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(&crypt_encryption_header(
             &self.encryption_header,
-            self.game.master_key(),
+            &self.master_key,
         ));
         let rolling = rolling_key(&self.encryption_header);
         for (block, param) in [
@@ -429,7 +542,8 @@ mod tests {
         let mut file_header = vec![0u8; game.file_header_size()];
         file_header[144..146].copy_from_slice(b"ML");
         Container {
-            game,
+            game: Some(game),
+            master_key: *game.master_key(),
             encryption_header,
             file_header,
             description: b"Team\nLeague\0".to_vec(),
@@ -474,8 +588,74 @@ mod tests {
         ));
         assert_eq!(
             Container::decrypt_any(&bytes).expect("detect").game,
-            Game::Pes2021
+            Some(Game::Pes2021)
         );
+    }
+
+    /// A save of a PES 2021-based game whose key is not in [`Game::ALL`]: the file header
+    /// carries the shuffled master key, and `data` has a zero-filled area at `zeros`.
+    fn unknown_game(zeros: std::ops::Range<usize>) -> Container {
+        let mut c = sample(Game::Pes2021);
+        c.game = None;
+        c.master_key = std::array::from_fn(|i| (i as u8).wrapping_mul(29) ^ 0xA5);
+        c.file_header[..64].copy_from_slice(&shuffle_master_key(&c.master_key));
+        c.file_header[176..183].copy_from_slice(b"Mod 27\0");
+        let mut x = 0x2545_f491u32;
+        c.data = (0..40_000)
+            .map(|i| {
+                x = x.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+                if zeros.contains(&i) {
+                    0
+                } else {
+                    (x >> 24) as u8
+                }
+            })
+            .collect();
+        c
+    }
+
+    #[test]
+    fn unknown_keys_are_recovered_from_the_file() {
+        let c = unknown_game(21_000..27_000);
+        let bytes = c.encrypt().expect("encrypt");
+        assert!(matches!(
+            Container::decrypt_any(&bytes),
+            Err(Error::UnknownKey)
+        ));
+        for scan_from in [0, 20_000, bytes.len()] {
+            let back = Container::recover(&bytes, scan_from).expect("recover");
+            let mut expected = c.clone();
+            expected.file_header = back.file_header.clone();
+            assert_eq!(back, expected);
+            assert_eq!(back.game_name(), "Mod 27");
+            assert_eq!(back.encrypt().expect("encrypt"), bytes);
+        }
+        let opened = Container::decrypt_or_recover(&bytes, 0).expect("open");
+        assert_eq!(opened.master_key, c.master_key);
+        // Known keys are still used directly.
+        let known = sample(Game::Pes2021).encrypt().expect("encrypt");
+        let opened = Container::decrypt_or_recover(&known, 0).expect("open");
+        assert_eq!(opened.game, Some(Game::Pes2021));
+    }
+
+    #[test]
+    fn recovery_fails_cleanly_without_known_plaintext_or_stored_key() {
+        // No constant area long enough.
+        let bytes = unknown_game(21_000..23_000).encrypt().expect("encrypt");
+        assert!(matches!(
+            Container::recover(&bytes, 0),
+            Err(Error::UnknownKey)
+        ));
+        // The rolling key is found, but the header does not carry the master key.
+        let mut c = unknown_game(21_000..27_000);
+        c.file_header[..64].fill(0);
+        let bytes = c.encrypt().expect("encrypt");
+        assert!(matches!(
+            Container::recover(&bytes, 0),
+            Err(Error::UnknownKey)
+        ));
+        assert!(Container::recover(&bytes[..600], 0).is_err());
+        assert!(Container::recover(&[], 0).is_err());
     }
 
     #[test]

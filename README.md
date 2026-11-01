@@ -5,7 +5,7 @@
 <h1 align="center">PES 2021/Football Life Master League Save Editor (Open-Source)</h1>
 
 <p align="center">
-  Open-source, cross-platform editor for <b>eFootball PES 2021</b> Master League saves (infinity money).
+  Open-source, cross-platform editor for <b>eFootball PES 2021</b> and <b>SP Football Life</b> Master League saves (infinity money).
 </p>
 
 Everything runs in memory with no helper programs, and every change is verified before and
@@ -20,6 +20,8 @@ after saving.
 * Transfer budget and salary budget, plus a one-click **Maximum money**
 * Club followers
 * Manager name (found automatically, also in patched databases)
+* eFootball PES 2021 and games built on it: Football Life 2025 and SP Football Life 2027 tested; the
+  encryption key of a version it has not seen yet is recovered from the save itself
 * Display in € / US$ / ¥ / £ / R$
 * Desktop app in English, Spanish and Brazilian Portuguese (follows the system language), with drag and drop
 * Command-line tool for scripting (`show`, `set`, `decrypt`, `encrypt`)
@@ -43,7 +45,8 @@ Every release includes `SHA256SUMS.txt` and a build provenance attestation
 
 1. **Quit Master League.**
 2. Open the editor and choose your save, e.g.
-   `Documents\KONAMI\eFootball PES 2021 SEASON UPDATE\<your ID>\ML00000001`.
+   `Documents\KONAMI\eFootball PES 2021 SEASON UPDATE\<your ID>\ML00000001`
+   (Football Life 2027: `Documents\SPGAME\Football Life\2027\save\ML00000000`).
 3. Change the values and click **Save**. A timestamped backup is created first.
 
 Full instructions, including the command line: [docs/USAGE.md](docs/USAGE.md).
@@ -51,6 +54,8 @@ Full instructions, including the command line: [docs/USAGE.md](docs/USAGE.md).
 ## Keeping your saves safe
 
 * A save is only editable if re-encrypting it unchanged reproduces the file byte for byte.
+* Saves from games other than PES 2021 itself must also show the PES 2021 Master League
+  layout before any field is read or written.
 * Only the bytes of the fields you change are written.
 * A backup is made before every save and is never overwritten.
 * Writing is atomic (temporary file + rename); if the final check fails, the previous
@@ -85,7 +90,8 @@ On a Mac, `scripts/build-macos.sh` builds the `.app` and `.dmg` in `dist/`
 
 * Save encryption is based on the public-domain
   [pesXdecrypter](https://github.com/the4chancup/pesXdecrypter) project, with the PES 2021
-  key published by *zlac*.
+  key published by *zlac*. Keys of other PES 2021-based games are recovered from their
+  saves (see [SAVE_FORMAT.md](docs/SAVE_FORMAT.md#unknown-keys)).
 * Master League field positions follow those used by *PES 2021 ML Money Tool* by
   *Devil Cold52*.
 

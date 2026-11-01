@@ -60,6 +60,9 @@ pub const HARD_MAX_BUDGET_RAW: u32 = 999_999_999;
 /// Smallest `data.dat` that contains every field above.
 pub const MIN_DATA_LEN: usize = SALARY_BUDGET.offset + 4;
 
+/// Coach records checked by [`has_pes2021_layout`].
+const LAYOUT_CHECK_SLOTS: usize = 100;
+
 impl U32Field {
     pub fn read(&self, data: &[u8]) -> Result<u32, Error> {
         let b = data
@@ -90,6 +93,20 @@ fn read_u32(data: &[u8], offset: usize) -> u32 {
 fn name_bytes(data: &[u8], offset: usize) -> &[u8] {
     let raw = &data[offset..offset + MANAGER_NAME_LEN];
     &raw[..raw.iter().position(|&b| b == 0).unwrap_or(raw.len())]
+}
+
+/// Whether `data` is laid out like eFootball PES 2021 Master League data: its first
+/// coach records sit where PES 2021 keeps them, each holding its own slot number.
+///
+/// Saves of games built on PES 2021 (whose files the editor may open with a recovered
+/// key) must pass this before any field is read or written. The budgets and followers
+/// have no signature of their own, but they live in the same layout.
+pub fn has_pes2021_layout(data: &[u8]) -> bool {
+    data.len() >= MIN_DATA_LEN
+        && (0..LAYOUT_CHECK_SLOTS).all(|slot| {
+            let header = COACH_TABLE_FIRST_NAME + slot * COACH_RECORD_SIZE - COACH_HEADER_SIZE;
+            read_u32(data, header) as usize == slot
+        })
 }
 
 /// Offsets of the name fields that hold the player's manager name.

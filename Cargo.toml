@@ -3,14 +3,14 @@ resolver = "2"
 members = ["crates/core", "crates/cli", "crates/gui"]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["pes21-ml-editor contributors"]
 
 [workspace.dependencies]
-pes21-ml-core = { path = "crates/core", version = "1.0.0" }
+pes21-ml-core = { path = "crates/core", version = "1.1.0" }
 thiserror = "2"
 tempfile = "3"
 clap = { version = "4", features = ["derive"] }

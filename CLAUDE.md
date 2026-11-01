@@ -8,7 +8,7 @@ name). Rust workspace, desktop app (egui) + command-line tool.
 
 | Path | What |
 |---|---|
-| `crates/core` (`pes21-ml-core`) | Library: save cipher (`crypto.rs`, `mt19937.rs`), Master League fields (`master_league.rs`), safe load/save (`save_file.rs`), display money (`money.rs`), bilingual `Error` (`lib.rs`) |
+| `crates/core` (`pes21-ml-core`) | Library: save cipher (`crypto.rs`, `mt19937.rs`), key recovery for unknown keys (`recover.rs`), Master League fields (`master_league.rs`), safe load/save (`save_file.rs`), display money (`money.rs`), bilingual `Error` (`lib.rs`) |
 | `crates/cli` (`pes21-ml` binary) | `show`, `set`, `decrypt`, `encrypt` (clap) |
 | `crates/gui` (`pes21-ml-editor` binary) | eframe/egui app; UI strings in `i18n.rs`; `build.rs` embeds Windows icon/version/manifest |
 | `assets/` | `icon.svg` (source), `icon-256.png`, `icon.ico`, `icon.icns`, `linux/` (`.desktop`, `install.sh`), `macos/Info.plist` |
@@ -52,6 +52,12 @@ MSRV is Rust 1.95 (`rust-version` in the workspace). Always build with `--locked
 
 * Cipher: port of the public-domain pesXdecrypter (MT19937-keyed XOR stream; per-game
   64-byte master keys in `crypto.rs`). Details in `docs/SAVE_FORMAT.md`.
+* Games built on PES 2021 (Football Life) use the same container. SP Football Life 2027
+  has its own master key (`Game::FootballLife2027`); keys not in `Game::ALL` are recovered
+  from the save (`Container::recover`: known zero plaintext in `data.dat` → MT19937 state
+  → `init_by_array` inverted → rolling key → master key stored shuffled in file header
+  bytes 0..64). A save not opened with the PES 2021 key must pass
+  `master_league::has_pes2021_layout` before any field is read or written.
 * Budgets are `u32` in units of €100 at `0xC7DD00` / `0xC7DD14`; followers at `0xB629A4`.
 * The manager is **not** at a fixed offset: it is the coach-table record (base name
   `0x133A38`, 600-byte records, 1300 slots) whose `coach_id` is `0xFFFFFFF5` and whose

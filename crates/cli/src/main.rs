@@ -6,10 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use pes21_ml_core::crypto::{Container, Game, ENCRYPTION_HEADER_SIZE, MAX_SAVE_SIZE};
+use pes21_ml_core::crypto::{
+    master_key_from_file_header, Container, Game, ENCRYPTION_HEADER_SIZE, MAX_SAVE_SIZE,
+};
 use pes21_ml_core::master_league::{Edit, MAX_BUDGET_RAW};
 use pes21_ml_core::money::{self, group_thousands, Currency};
-use pes21_ml_core::save_file::{read_limited, save_edits, write_atomically, MlSave};
+use pes21_ml_core::save_file::{
+    read_limited, save_edits, write_atomically, MlSave, RECOVERY_SCAN_FROM,
+};
 use pes21_ml_core::Error;
 
 #[derive(Parser)]
@@ -184,6 +188,9 @@ fn show(file: &Path, json: bool, currency: Currency) -> Result<(), Error> {
     Ok(())
 }
 
+/// `game.txt` contents for a file whose key was recovered rather than known.
+const RECOVERED: &str = "Recovered";
+
 const FILES: [&str; 6] = [
     "encryptHeader.dat",
     "header.dat",
@@ -208,7 +215,7 @@ fn write_new(path: &Path, data: &[u8]) -> Result<(), Error> {
 
 fn decrypt(file: &Path, out_dir: &Path) -> Result<(), Error> {
     let bytes = read_limited(file)?;
-    let c = Container::decrypt_any(&bytes)?;
+    let c = Container::decrypt_or_recover(&bytes, RECOVERY_SCAN_FROM)?;
     // Decrypted blocks are private data: the folder must be new (never overwrite
     // anything) and, on Unix, readable only by the current user.
     let mut dir = fs::DirBuilder::new();
@@ -230,15 +237,13 @@ fn decrypt(file: &Path, out_dir: &Path) -> Result<(), Error> {
     for (name, data) in FILES.iter().zip(blocks) {
         write_new(&out_dir.join(name), data)?;
     }
-    write_new(
-        &out_dir.join("game.txt"),
-        format!("{:?}\n", c.game).as_bytes(),
-    )?;
+    let game = c.game.map_or(RECOVERED.to_owned(), |g| format!("{g:?}"));
+    write_new(&out_dir.join("game.txt"), format!("{game}\n").as_bytes())?;
     println!(
         "{} → {} ({})",
         file.display(),
         out_dir.display(),
-        c.game.name()
+        c.game_name()
     );
     Ok(())
 }
@@ -252,11 +257,14 @@ fn encrypt(in_dir: &Path, out_file: &Path, force: bool) -> Result<(), Error> {
     }
     // Folders made by pesXdecrypter have no game.txt: default to PES 2021.
     let game = match fs::read_to_string(in_dir.join("game.txt")) {
-        Ok(name) => Game::ALL
-            .into_iter()
-            .find(|g| format!("{g:?}") == name.trim())
-            .ok_or(Error::UnknownKey)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Game::Pes2021,
+        Ok(name) if name.trim() == RECOVERED => None,
+        Ok(name) => Some(
+            Game::ALL
+                .into_iter()
+                .find(|g| format!("{g:?}") == name.trim())
+                .ok_or(Error::UnknownKey)?,
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Game::Pes2021),
         Err(e) => return Err(e.into()),
     };
     // Check the combined size before reading anything into memory.
@@ -280,23 +288,34 @@ fn encrypt(in_dir: &Path, out_file: &Path, force: bool) -> Result<(), Error> {
     enc.copy_from_slice(&blocks[0]);
     let mut it = blocks.into_iter().skip(1);
     let mut next = || it.next().unwrap_or_default();
+    let file_header = next();
+    let master_key = match game {
+        Some(g) => *g.master_key(),
+        // A recovered key is the one the game stores in the file header.
+        None => master_key_from_file_header(&file_header).ok_or(Error::BadLayout)?,
+    };
     let c = Container {
         game,
+        master_key,
         encryption_header: enc,
-        file_header: next(),
+        file_header,
         description: next(),
         logo: next(),
         data: next(),
         serial: next(),
     };
     let bytes = c.encrypt()?;
-    Container::decrypt(&bytes, game)?; // sanity check
+    // sanity check
+    match game {
+        Some(g) => Container::decrypt(&bytes, g)?,
+        None => Container::decrypt_with_master_key(&bytes, &master_key)?,
+    };
     write_atomically(out_file, &bytes, None)?;
     println!(
         "{} → {} ({})",
         in_dir.display(),
         out_file.display(),
-        game.name()
+        c.game_name()
     );
     Ok(())
 }

@@ -1,4 +1,4 @@
-# Save file format (PES 2016 – eFootball PES 2021)
+# Save file format (PES 2016 – eFootball PES 2021, and games built on it)
 
 Based on the public-domain [pesXdecrypter](https://github.com/the4chancup/pesXdecrypter)
 project and checked against real PES 2021 saves (decrypting and re-encrypting reproduces
@@ -53,6 +53,39 @@ XOR is symmetric: the same function encrypts and decrypts.
 `320 + 208 + desc + logo + data + serial × 2` must equal the file size. The editor uses
 this to reject corrupted files and to detect a wrong key.
 
+## Games built on PES 2021
+
+The Football Life series (SmokePatch) ships a modified PES 2021 executable. Football Life
+2025 kept the PES 2021 master key; **SP Football Life 2027** uses its own (in `crypto.rs`,
+file header game version `SP Football Life 2027`, saves in
+`Documents\SPGAME\Football Life\2027\save\`). The container is otherwise identical.
+
+PES 2021 and the games built on it store their **shuffled master key** in bytes 0..64 of
+the file header, so once a file header can be decrypted the master key is known.
+
+## Unknown keys
+
+When no known key opens a file, `Container::recover` (`crates/core/src/recover.rs`) finds
+the keys from the file alone:
+
+1. Each keystream word is `m[t+4] ^ ror(m[t+3],13) ^ ror(m[t+2],6) ^ rol(m[t+1],5) ^
+   ror(m[t],10)`, where `m` are MT19937 outputs — a linear function of them over GF(2).
+2. Master League data keeps large zero-filled areas (one of 168 KB right after the
+   budgets in PES 2021-layout data). Guessing that a 2.6 KB window holds zeros (or
+   0xFF bytes) makes the keystream there known; the four outputs before the window are
+   128 unknown bits, and the MT19937 recurrence `y[n+624] = y[n+397] ^ twist(y[n],
+   y[n+1])` on untempered outputs gives 640 linear equations. Gaussian elimination solves
+   them or proves the guess wrong.
+3. Running the recurrence backwards reaches the state `init_by_array` produced, which is
+   inverted to read the 16-word block key. Every possible block start is tried; only the
+   real one makes the 39 copies of the key that `init_by_array` mixes in agree.
+4. The block key of `data.dat` is `rolling XOR u64(2)`. The rolling key decrypts the file
+   header, which yields the master key (above). The file is only accepted if that master
+   key opens it like any known key.
+
+The search starts right after the Master League budgets, so it normally takes a few tens
+of milliseconds; a full scan of a 20 MB file without a usable area takes a few seconds.
+
 ## Master League (inside `data.dat`)
 
 | Field | Offset | Type |
@@ -63,9 +96,14 @@ this to reject corrupted files and to detect a wrong key.
 | Manager name | coach table (below) | 46 bytes, NUL-terminated UTF-8 (max 45) |
 
 These offsets apply to PES 2021 (exe 1.01–1.04, data packs 1.0–4.0) and were also checked
-on a save from the community patch "Football Life 2025". Other versions may move things
-around; the editor rejects saves whose `data.dat` is too small, but cannot prove the
-offsets are right on untested versions — check the values shown before saving.
+on saves from "Football Life 2025" and "SP Football Life 2027" (whose `data.dat` is about
+19 MB, against 13 MB, but keeps every field above at the same offset). Other versions may
+move things around; the editor rejects saves whose `data.dat` is too small, but cannot
+prove the offsets are right on untested versions — check the values shown before saving.
+
+For games other than PES 2021 itself the editor also requires the coach table's first 100
+records to hold their own slot numbers (`0, 1, 2, …`), which places the table — and with
+it the layout — where PES 2021 keeps it.
 
 ### Coach table and the player's manager
 

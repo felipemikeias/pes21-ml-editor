@@ -2,7 +2,7 @@
 
 Installation: [Windows](INSTALL-WINDOWS.md) · [macOS](INSTALL-MACOS.md) · [Linux](INSTALL-LINUX.md)
 
-> **Always quit PES 2021 before saving.** The editor refuses to write if the save changes
+> **Always quit the game (PES 2021 / Football Life) before saving.** The editor refuses to write if the save changes
 > while it is open, but the game may still overwrite your edit when it saves later.
 
 ## Desktop app
@@ -82,18 +82,19 @@ not found). The exit code is `0` on success and `1` on any error.
 ### `decrypt` / `encrypt`
 
 For advanced users and researchers: `decrypt` writes the decrypted blocks of any PES
-2016–2021 save (`encryptHeader.dat`, `header.dat`, `description.dat`, `logo.png`,
-`data.dat`, `version.txt`, plus `game.txt`) into a **new** folder; `encrypt` rebuilds a
-save from such a folder. The layout is compatible with pesXdecrypter. The format is
+2016–2021 save, or of a game built on PES 2021 (`encryptHeader.dat`, `header.dat`,
+`description.dat`, `logo.png`, `data.dat`, `version.txt`, plus `game.txt`) into a **new**
+folder; `encrypt` rebuilds a save from such a folder. When the key was recovered rather
+than known, `game.txt` says `Recovered` and `encrypt` takes the key from `header.dat`. The layout is compatible with pesXdecrypter. The format is
 described in [SAVE_FORMAT.md](SAVE_FORMAT.md).
 
 ## Error messages
 
 | Message | Meaning |
 |---|---|
-| *invalid save layout or wrong key* / *not a known PES 2016–2021 save* | The file is not a PES save or is damaged. |
+| *invalid save layout or wrong key* / *could not decrypt this save* | The file is not a PES (or PES 2021-based) save, or it is damaged. |
 | *this save is from …, not eFootball PES 2021* | A save from another PES edition. |
-| *not a compatible Master League save* | A PES 2021 file that is not a Master League save (e.g. `EDIT` or `SYSTEM`). |
+| *not a compatible Master League save* | Not a Master League save (e.g. `EDIT` or `SYSTEM`), or a game whose Master League data is not laid out like PES 2021's. |
 | *re-encryption does not reproduce the file* | The editor does not fully understand this file, so it refuses to modify it. |
 | *the player's manager was not found* | No user-created manager in this save; the name cannot be changed. |
 | *the save changed on disk while editing* | The game or Steam Cloud wrote the file meanwhile. Quit the game and retry. |
@@ -102,5 +103,11 @@ described in [SAVE_FORMAT.md](SAVE_FORMAT.md).
 ## Compatibility
 
 Tested with PES 2021 Season Update (exe 1.01–1.04, data packs 1.0–4.0) and with the
-community patch "Football Life 2025". Other patches may move data around; always check
-that the values shown match what you see in the game before saving.
+community games "Football Life 2025" and "SP Football Life 2027" (saves in
+`Documents\SPGAME\Football Life\2027\save\`).
+
+Other games built on PES 2021 may use their own encryption key. The editor then recovers
+the key from the save itself (it takes a moment longer to open) and only accepts the file
+if it decrypts and re-encrypts exactly and its Master League data has the PES 2021
+layout. Patches may still move data around; always check that the values shown match what
+you see in the game before saving.

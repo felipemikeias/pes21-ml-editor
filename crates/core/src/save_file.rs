@@ -20,9 +20,15 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::crypto::{Container, Game, MAX_SAVE_SIZE};
-use crate::master_league::{Edit, MasterLeague};
+use crate::crypto::{Container, Game, ENCRYPTION_HEADER_SIZE, FILE_HEADER_SIZE, MAX_SAVE_SIZE};
+use crate::master_league::{has_pes2021_layout, Edit, MasterLeague, SALARY_BUDGET};
 use crate::Error;
+
+/// Where to start looking for known plaintext when a save's key has to be recovered
+/// ([`Container::recover`]): Master League data in the PES 2021 layout keeps a large
+/// zero-filled area just after the budgets, so the search ends almost at once.
+pub const RECOVERY_SCAN_FROM: usize =
+    ENCRYPTION_HEADER_SIZE + FILE_HEADER_SIZE + SALARY_BUDGET.offset;
 
 /// A decrypted, validated Master League save.
 #[derive(Debug, Clone)]
@@ -47,20 +53,20 @@ pub fn read_limited(path: &Path) -> Result<Vec<u8>, Error> {
 }
 
 impl MlSave {
-    /// Decrypts and validates a PES 2021 Master League save held in memory.
+    /// Decrypts and validates a Master League save held in memory: eFootball PES 2021,
+    /// or a game built on it whose data has the same layout (with a known or recovered
+    /// key).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let container = match Container::decrypt(bytes, Game::Pes2021) {
-            Ok(c) => c,
-            Err(Error::BadLayout) => {
-                // Give a precise message if it is a save from another PES edition.
-                return Err(match Container::decrypt_any(bytes) {
-                    Ok(other) => Error::WrongGame(other.game.name()),
-                    Err(_) => Error::UnknownKey,
-                });
-            }
-            Err(e) => return Err(e),
-        };
+        let container = Container::decrypt_or_recover(bytes, RECOVERY_SCAN_FROM)?;
+        if let Some(game) = container.game.filter(|g| !g.is_pes2021_based()) {
+            // Earlier PES editions keep their data elsewhere.
+            return Err(Error::WrongGame(game.name()));
+        }
         if container.file_type() != "ML" {
+            return Err(Error::NotMasterLeague);
+        }
+        // PES 2021 itself is trusted on its offsets; any other game must show them.
+        if container.game != Some(Game::Pes2021) && !has_pes2021_layout(&container.data) {
             return Err(Error::NotMasterLeague);
         }
         // The encoder must reproduce the exact input before we allow writing anything.
@@ -267,22 +273,42 @@ pub fn save_edits(path: &Path, edit: &Edit, backup: bool) -> Result<SaveReport, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{ENCRYPTION_HEADER_SIZE, FILE_HEADER_SIZE};
+    use crate::crypto::{master_key_from_file_header, MasterKey};
     use crate::master_league::{
         COACH_RECORD_SIZE, COACH_TABLE_FIRST_NAME, MIN_DATA_LEN, USER_COACH_ID,
     };
 
     /// A synthetic but structurally valid PES 2021 ML save.
     fn fixture() -> Vec<u8> {
+        save_of(Some(Game::Pes2021), false)
+    }
+
+    /// A synthetic ML save of `game` (`None`: a PES 2021-based game with an unknown
+    /// key), with the coach table numbered like PES 2021's if `numbered`.
+    fn save_of(game: Option<Game>, numbered: bool) -> Vec<u8> {
+        let master_key: MasterKey = match game {
+            Some(g) => *g.master_key(),
+            None => std::array::from_fn(|i| (i as u8).wrapping_mul(13) ^ 0x3C),
+        };
         let mut file_header = vec![0u8; FILE_HEADER_SIZE];
+        // The shuffle is its own inverse: this stores the key the way the games do.
+        file_header[..64]
+            .copy_from_slice(&master_key_from_file_header(&master_key).expect("64 bytes"));
         file_header[144..146].copy_from_slice(b"ML");
         let mut data = vec![0u8; MIN_DATA_LEN + 16];
+        if numbered {
+            for slot in 0..1300 {
+                let header = COACH_TABLE_FIRST_NAME + slot * COACH_RECORD_SIZE - 8;
+                data[header..header + 4].copy_from_slice(&(slot as u32).to_le_bytes());
+            }
+        }
         let name = COACH_TABLE_FIRST_NAME + 3 * COACH_RECORD_SIZE;
         data[name - 8..name - 4].copy_from_slice(&3u32.to_le_bytes());
         data[name - 4..name].copy_from_slice(&USER_COACH_ID.to_le_bytes());
         data[name..name + 4].copy_from_slice(b"Test");
         Container {
-            game: Game::Pes2021,
+            game,
+            master_key,
             encryption_header: [3u8; ENCRYPTION_HEADER_SIZE],
             file_header,
             description: b"Team\0".to_vec(),
@@ -348,6 +374,41 @@ mod tests {
         assert!(save_edits(&save, &followers(1), true).is_err());
         assert_eq!(fs::read(&save).expect("read"), bytes);
         assert_eq!(fs::read_dir(dir.path()).expect("dir").count(), 1);
+    }
+
+    #[test]
+    fn games_built_on_pes_2021_are_accepted_when_the_layout_matches() {
+        for game in [Some(Game::FootballLife2027), None] {
+            let save = MlSave::from_bytes(&save_of(game, true)).expect("compatible save");
+            assert_eq!(save.container.game, game);
+            assert_eq!(save.values.manager_name.as_deref(), Some("Test"));
+            assert!(matches!(
+                MlSave::from_bytes(&save_of(game, false)),
+                Err(Error::NotMasterLeague)
+            ));
+        }
+        // Earlier editions are recognised and refused.
+        assert!(matches!(
+            MlSave::from_bytes(&save_of(Some(Game::Pes2020), true)),
+            Err(Error::WrongGame("eFootball PES 2020"))
+        ));
+    }
+
+    #[test]
+    fn edits_of_a_recovered_key_save_keep_the_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let save = dir.path().join("ML00000000");
+        fs::write(&save, save_of(None, true)).expect("write");
+        let before = MlSave::load(&save).expect("load");
+        let report = save_edits(&save, &followers(99), true).expect("save");
+        assert!(report.changed);
+        let after = MlSave::load(&save).expect("reload");
+        assert_eq!(after.values.club_followers, 99);
+        assert_eq!(after.container.master_key, before.container.master_key);
+        assert_eq!(
+            after.container.encryption_header,
+            before.container.encryption_header
+        );
     }
 
     #[cfg(unix)]
