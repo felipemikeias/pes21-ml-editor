@@ -16,7 +16,7 @@ pes21-ml-core.workspace = true
 # OpenGL (glow) backend: small binaries and works on older GPUs/VMs.
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
 # Native dialogs; on Linux uses the XDG desktop portal (no GTK build dependency).
-rfd = "0.17"
+rfd = "0.18"
 # Reads the operating system language to pick the UI language.
 sys-locale = "0.3"
 
